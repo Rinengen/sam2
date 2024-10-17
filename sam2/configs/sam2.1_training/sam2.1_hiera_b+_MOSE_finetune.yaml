@@ -13,8 +13,8 @@ scratch:
 
 dataset:
   # PATHS to Dataset
-  img_folder: /kaggle/input/mose-protes/mose_dataset/Annotations/ # PATH to MOSE JPEGImages folder
-  gt_folder: /kaggle/input/mose-protes/mose_dataset/JPEGImages/ # PATH to MOSE Annotations folder
+  img_folder: /kaggle/input/mose-protes/mose_dataset/Annotations/video_1 # PATH to MOSE JPEGImages folder
+  gt_folder: /kaggle/input/mose-protes/mose_dataset/JPEGImages/video_1 # PATH to MOSE Annotations folder
   file_list_txt: null
   multiplier: 2
 
