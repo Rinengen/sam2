@@ -53,7 +53,7 @@ class SAM2VideoPredictor(SAM2Base):
         # Инициализация YOLO модели при первом вызове
         if self.yolo_model is None:
             self.yolo_model = YOLO(
-                model="content/drive/weights_models/YOLOv11_seg.pt"
+                model='/content/drive/MyDrive/wights_path/YOLOv11_seg.pt'
                 )
         print("******************************")
         print("YOLO successfully initialized!")
