@@ -8,6 +8,14 @@ import warnings
 from collections import OrderedDict
 
 import torch
+from ultralytics import YOLO
+from torchvision import transforms
+
+import matplotlib.pyplot as plt
+import matplotlib.patches as patches
+import numpy as np
+import cv2
+from pathlib import Path
 
 from tqdm import tqdm
 
@@ -39,7 +47,18 @@ class SAM2VideoPredictor(SAM2Base):
         self.clear_non_cond_mem_around_input = clear_non_cond_mem_around_input
         self.clear_non_cond_mem_for_multi_obj = clear_non_cond_mem_for_multi_obj
         self.add_all_frames_to_correct_as_cond = add_all_frames_to_correct_as_cond
+        self.yolo_model = None 
 
+    def initialize_yolo(self):
+        # Инициализация YOLO модели при первом вызове
+        if self.yolo_model is None:
+            self.yolo_model = YOLO(
+                model="content/drive/weights_models/YOLOv11_seg.pt"
+                )
+        print("******************************")
+        print("YOLO successfully initialized!")
+        print("******************************\n")
+    
     @torch.inference_mode()
     def init_state(
         self,
@@ -50,7 +69,7 @@ class SAM2VideoPredictor(SAM2Base):
     ):
         """Initialize an inference state."""
         compute_device = self.device  # device of the model
-        images, video_height, video_width = load_video_frames(
+        images, video_height, video_width, img_paths = load_video_frames(
             video_path=video_path,
             image_size=self.image_size,
             offload_video_to_cpu=offload_video_to_cpu,
@@ -60,6 +79,7 @@ class SAM2VideoPredictor(SAM2Base):
         inference_state = {}
         inference_state["images"] = images
         inference_state["num_frames"] = len(images)
+        inference_state["img_paths"] = img_paths
         # whether to offload the video frames to CPU memory
         # turning on this option saves the GPU memory with only a very small overhead
         inference_state["offload_video_to_cpu"] = offload_video_to_cpu
@@ -669,7 +689,7 @@ class SAM2VideoPredictor(SAM2Base):
     ):
         """Propagate the input points across frames to track in the entire video."""
         self.propagate_in_video_preflight(inference_state)
-
+        self.initialize_yolo()
         output_dict = inference_state["output_dict"]
         consolidated_frame_inds = inference_state["consolidated_frame_inds"]
         obj_ids = inference_state["obj_ids"]
@@ -700,11 +720,93 @@ class SAM2VideoPredictor(SAM2Base):
             )
             processing_order = range(start_frame_idx, end_frame_idx + 1)
 
+        def create_multi_class_mask(image_shape, yolo_results):
+            """
+            Создаёт мультиклассовую маску на основе сегментации YOLO для всех объектов на кадре.
+
+            Params:
+                image_shape (tuple): Размеры оригинального изображения (высота, ширина).
+                yolo_results (list): Результаты предсказания YOLO.
+
+            Returns:
+                multi_class_mask (np.ndarray): Маска, где каждое значение пикселя соответствует классу объекта.
+            """
+            height, width = image_shape[:2]
+            multi_class_mask = np.zeros((height, width), dtype=np.uint8)  # Фон по умолчанию (0)
+
+            for r in yolo_results:
+                if r.masks is None:
+                    continue  # Пропускаем, если YOLO не вернул маски
+
+                yolo_masks = r.masks.xy  # Координаты контуров масок
+                class_ids = r.boxes.cls.cpu().numpy()  # Классы объектов
+
+                for i, contour in enumerate(yolo_masks):
+                    # Конвертируем контур в бинарную маску
+                    binary_mask = np.zeros((height, width), dtype=np.uint8)
+                    cv2.fillPoly(binary_mask, [contour.astype(np.int32)], color=1)  # Заполняем контур
+
+                    # Добавляем класс на область маски (+1 для смещения от фона)
+                    class_id = int(class_ids[i])
+                    multi_class_mask[binary_mask == 1] = class_id + 1  
+
+            return multi_class_mask
+        
+
+        # Initial unique SAM classes from the first processed frame
+        unique_sam_classes = set(obj_ids)  # This is the set of SAM classes on the current frame
+        
+        previous_yolo_classes = None  # This will store YOLO classes from the previous frame
+
         for frame_idx in tqdm(processing_order, desc="propagate in video"):
             # We skip those frames already in consolidated outputs (these are frames
             # that received input clicks or mask). Note that we cannot directly run
             # batched forward on them via `_run_single_frame_inference` because the
             # number of clicks on each object might be different.
+
+            #Блок работы с predictom YOLO
+            ##########################################################################
+
+            
+            # Получаем кадр для детектирования классов YOLO
+            frame_name = inference_state["img_paths"][frame_idx]
+
+
+            with torch.no_grad():
+                yolo_results = self.yolo_model.predict(frame_name, conf=0.5)  # Получаем результаты
+
+             # Извлечение уникальных классов из YOLO
+            unique_yolo_classes = {result.names[int(box.cls.cpu())] for result in yolo_results for box in result.boxes}
+            
+            yolo_mask = create_multi_class_mask((1080,1920), yolo_results)
+
+            # Check the condition: Compare YOLO classes from the previous frame with SAM classes from the current frame
+            if frame_idx > 0 and previous_yolo_classes:
+                # Condition to stop if the previous YOLO frame had more classes than current SAM frame
+                if len(previous_yolo_classes) > num_active_objects:
+                    reason = "LESS_CLASSES"
+                    print(f"Stop: On frame {frame_idx}, YOLO detected more classes on the previous frame ({len(previous_yolo_classes)}) "
+                        f"than SAM on the current frame ({len(unique_sam_classes)})")
+                    yield frame_idx, obj_ids, video_res_masks, reason,  yolo_mask  # Yield None to indicate stopping
+                    return  # End the generator
+
+            # Check if the number of unique YOLO classes is greater than SAM classes on the current frame
+            if len(unique_yolo_classes) > len(unique_sam_classes):
+                reason = "MORE_CLASSES"
+                print(f"Stop: In frame {frame_idx}, the number of unique YOLO classes ({len(unique_yolo_classes)}) "
+                    f"is greater than SAM classes ({len(unique_sam_classes)})")
+                yield frame_idx, obj_ids, video_res_masks, reason,  yolo_mask  # Yield None to indicate stopping
+                return  # End the generator
+
+            # Update the SAM classes for the current frame
+
+            print(f"Number segment class of SAM: {len(unique_sam_classes)}")
+            print(f"Number detect class of YOLO: {unique_yolo_classes}")
+            # Save the current YOLO classes for use in the next frame
+            previous_yolo_classes = unique_yolo_classes
+            #########################################################################
+
+            
             if frame_idx in consolidated_frame_inds["cond_frame_outputs"]:
                 storage_key = "cond_frame_outputs"
                 current_out = output_dict[storage_key][frame_idx]
@@ -742,7 +844,25 @@ class SAM2VideoPredictor(SAM2Base):
             _, video_res_masks = self._get_orig_video_res_output(
                 inference_state, pred_masks
             )
-            yield frame_idx, obj_ids, video_res_masks
+
+            ###Блог отслеживания количества сегментированных классов SAM2
+            ######################################################################
+            # Убираем лишнюю размерность
+            video_res_masks = video_res_masks.squeeze(1)
+
+            active_classes = []
+            for obj_idx in range(video_res_masks.shape[0]):
+                mask = video_res_masks[obj_idx]
+                if torch.any(mask > 0.0):  # Учитываем только активные маски
+                    active_classes.append(obj_idx)
+
+            # Количество активных объектов
+            num_active_objects = len(active_classes)
+
+            print(f"Frame {frame_idx}: Number of active objects: {num_active_objects}")
+            #######################################################################
+
+            yield frame_idx, obj_ids, video_res_masks, None,  yolo_mask
 
     def _add_output_per_object(
         self, inference_state, frame_idx, current_out, storage_key
