@@ -55,9 +55,9 @@ class SAM2VideoPredictor(SAM2Base):
             self.yolo_model = YOLO(
                 model='/content/drive/MyDrive/wights_path/YOLOv11_seg.pt'
                 )
-        print("******************************")
-        print("YOLO successfully initialized!")
-        print("******************************\n")
+        # print("******************************")
+        # print("YOLO successfully initialized!")
+        # print("******************************\n")
     
     @torch.inference_mode()
     def init_state(
@@ -690,6 +690,11 @@ class SAM2VideoPredictor(SAM2Base):
         """Propagate the input points across frames to track in the entire video."""
         self.propagate_in_video_preflight(inference_state)
         self.initialize_yolo()
+        # Перевод модели YOLO в режим half, если доступен GPU
+        if torch.cuda.is_available():
+            self.yolo_model.to("cuda").half()
+        else:
+            self.yolo_model.to("cpu")
         output_dict = inference_state["output_dict"]
         consolidated_frame_inds = inference_state["consolidated_frame_inds"]
         obj_ids = inference_state["obj_ids"]
@@ -770,10 +775,8 @@ class SAM2VideoPredictor(SAM2Base):
             
             # Получаем кадр для детектирования классов YOLO
             frame_name = inference_state["img_paths"][frame_idx]
-
-
-            with torch.no_grad():
-                yolo_results = self.yolo_model.predict(frame_name, conf=0.5)  # Получаем результаты
+           
+            yolo_results = self.yolo_model.predict(frame_name, conf=0.5)  # Получаем результаты
 
              # Извлечение уникальных классов из YOLO
             unique_yolo_classes = {result.names[int(box.cls.cpu())] for result in yolo_results for box in result.boxes}
@@ -800,8 +803,8 @@ class SAM2VideoPredictor(SAM2Base):
 
             # Update the SAM classes for the current frame
 
-            print(f"Number segment class of SAM: {len(unique_sam_classes)}")
-            print(f"Number detect class of YOLO: {unique_yolo_classes}")
+            #print(f"Number segment class of SAM: {len(unique_sam_classes)}")
+            #print(f"Number detect class of YOLO: {unique_yolo_classes}")
             # Save the current YOLO classes for use in the next frame
             previous_yolo_classes = unique_yolo_classes
             #########################################################################
@@ -859,8 +862,8 @@ class SAM2VideoPredictor(SAM2Base):
             # Количество активных объектов
             num_active_objects = len(active_classes)
 
-            print(f"Frame {frame_idx}: Number of active objects: {num_active_objects}")
-            #######################################################################
+            #print(f"Frame {frame_idx}: Number of active objects: {num_active_objects}")
+            ########################################################################
 
             yield frame_idx, obj_ids, video_res_masks, None,  yolo_mask
 
