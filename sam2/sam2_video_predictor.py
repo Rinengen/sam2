@@ -691,10 +691,10 @@ class SAM2VideoPredictor(SAM2Base):
         self.propagate_in_video_preflight(inference_state)
         self.initialize_yolo()
         # Перевод модели YOLO в режим half, если доступен GPU
-        if torch.cuda.is_available():
-            self.yolo_model.to("cuda").half()
-        else:
-            self.yolo_model.to("cpu")
+        #if torch.cuda.is_available():
+        #    self.yolo_model.to("cuda").half()
+        #else:
+        self.yolo_model.to("cpu")
         output_dict = inference_state["output_dict"]
         consolidated_frame_inds = inference_state["consolidated_frame_inds"]
         obj_ids = inference_state["obj_ids"]
