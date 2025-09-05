@@ -104,6 +104,8 @@ def build_sam2_video_predictor(
     mode="eval",
     hydra_overrides_extra=[],
     apply_postprocessing=True,
+    yolo_model=None,     # <--- новый аргумент
+    yolo_conf=None,      # <--- новый аргумент
     **kwargs,
 ):
     hydra_overrides = [
@@ -112,21 +114,23 @@ def build_sam2_video_predictor(
     if apply_postprocessing:
         hydra_overrides_extra = hydra_overrides_extra.copy()
         hydra_overrides_extra += [
-            # dynamically fall back to multi-mask if the single mask is not stable
             "++model.sam_mask_decoder_extra_args.dynamic_multimask_via_stability=true",
             "++model.sam_mask_decoder_extra_args.dynamic_multimask_stability_delta=0.05",
             "++model.sam_mask_decoder_extra_args.dynamic_multimask_stability_thresh=0.98",
-            # the sigmoid mask logits on interacted frames with clicks in the memory encoder so that the encoded masks are exactly as what users see from clicking
             "++model.binarize_mask_from_pts_for_mem_enc=true",
-            # fill small holes in the low-res masks up to `fill_hole_area` (before resizing them to the original video resolution)
             "++model.fill_hole_area=8",
         ]
     hydra_overrides.extend(hydra_overrides_extra)
 
-    # Read config and init model
     cfg = compose(config_name=config_file, overrides=hydra_overrides)
     OmegaConf.resolve(cfg)
     model = instantiate(cfg.model, _recursive_=True)
+
+    # Если передали YOLO через аргумент — сохраняем его в предиктор
+    if yolo_model is not None:
+        model.yolo_model = yolo_model
+        model.yolo_conf = yolo_conf
+
     _load_checkpoint(model, ckpt_path)
     model = model.to(device)
     if mode == "eval":
