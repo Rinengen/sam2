@@ -26,6 +26,7 @@ from sam2.utils.misc import concat_points, fill_holes_in_mask_scores, load_video
 class SAM2VideoPredictor(SAM2Base):
     """The predictor class to handle user interactions and manage inference states."""
 
+
     def __init__(
         self,
         fill_hole_area=0,
@@ -39,6 +40,8 @@ class SAM2VideoPredictor(SAM2Base):
         # if `add_all_frames_to_correct_as_cond` is True, we also append to the conditioning frame list any frame that receives a later correction click
         # if `add_all_frames_to_correct_as_cond` is False, we conditioning frame list to only use those initial conditioning frames
         add_all_frames_to_correct_as_cond=False,
+        yolo_model=None,       # <-- новый аргумент
+        yolo_conf=None,        # <-- новый аргумент
         **kwargs,
     ):
         super().__init__(**kwargs)
@@ -47,17 +50,14 @@ class SAM2VideoPredictor(SAM2Base):
         self.clear_non_cond_mem_around_input = clear_non_cond_mem_around_input
         self.clear_non_cond_mem_for_multi_obj = clear_non_cond_mem_for_multi_obj
         self.add_all_frames_to_correct_as_cond = add_all_frames_to_correct_as_cond
-        self.yolo_model = None 
+        self.yolo_model = yolo_model      # если передали через kwargs — сохраняем
+        self.yolo_conf = yolo_conf
+
 
     def initialize_yolo(self):
-        # Инициализация YOLO модели при первом вызове
         if self.yolo_model is None:
-            self.yolo_model = YOLO(
-                model='/content/drive/MyDrive/wights_path/YOLOv11_seg.pt'
-                )
-        # print("******************************")
-        # print("YOLO successfully initialized!")
-        # print("******************************\n")
+            raise RuntimeError("YOLO model is not initialized! Pass yolo_model in config.")
+
     
     @torch.inference_mode()
     def init_state(
@@ -689,12 +689,14 @@ class SAM2VideoPredictor(SAM2Base):
     ):
         """Propagate the input points across frames to track in the entire video."""
         self.propagate_in_video_preflight(inference_state)
-        self.initialize_yolo()
+        if self.yolo_model is None:
+            raise RuntimeError("YOLO model is not initialized! Pass yolo_model in config.")
         # Перевод модели YOLO в режим half, если доступен GPU
         if torch.cuda.is_available():
-            self.yolo_model.to("cuda").half()
+            self.yolo_model.to("cuda")
         else:
             self.yolo_model.to("cpu")
+            
         output_dict = inference_state["output_dict"]
         consolidated_frame_inds = inference_state["consolidated_frame_inds"]
         obj_ids = inference_state["obj_ids"]
