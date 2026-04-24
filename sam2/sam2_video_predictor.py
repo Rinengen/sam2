@@ -907,12 +907,21 @@ class SAM2VideoPredictor(SAM2Base):
                         continue
 
     
-                # CASE 2: YOLO сейчас видит больше, чем SAM → сразу откат
+                # CASE 2: YOLO сейчас видит больше, чем SAM → пропускаем коррекцию
                 elif len(unique_yolo_classes) > len(unique_sam_classes):
                     reason = "MORE_CLASSES"
                     self.less_counter = 0
+
+                    H, W = inference_state["video_height"], inference_state["video_width"]
+                    video_res_masks = torch.zeros(
+                        (0, H, W),
+                        dtype=torch.float32,
+                        device=device
+                    )
+
                     print(f"🛑 MORE_CLASSES: кадр {frame_idx}, YOLO={len(unique_yolo_classes)}, SAM={len(unique_sam_classes)}")
-                    yield frame_idx, obj_ids, None, reason, yolo_mask
+
+                    yield frame_idx, obj_ids, video_res_masks, reason, yolo_mask, frame_path
                     continue
     
                 else:
